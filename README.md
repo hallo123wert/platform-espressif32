@@ -1,122 +1,39 @@
-# pioarduino (p)eople (i)nitiated (o)ptimized (arduino)
+# Espressif 32: development platform for [PlatformIO](https://platformio.org)
 
-[![Build Status](https://github.com/pioarduino/platform-espressif32/actions/workflows/examples.yml/badge.svg)](https://github.com/pioarduino/platform-espressif32/actions)
-[![Discord](https://img.shields.io/discord/1263397951829708871.svg?logo=discord&logoColor=white&color=5865F2&label=Discord)](https://discord.gg/Nutz9crnZr)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pioarduino/platform-espressif32)
-[![GitHub latest release](https://img.shields.io/github/downloads/pioarduino/platform-espressif32/total?label=Downloads)](https://github.com/pioarduino/platform-espressif32/releases/latest)
-[![Downloads latest release](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fespressif%2Farduino-esp32%2Freleases%2Flatest&query=%24.assets%5B0%5D.download_count&label=Downloads%20latest)](https://github.com/pioarduino/platform-espressif32/releases/latest)
+[![Build Status](https://github.com/platformio/platform-espressif32/workflows/Examples/badge.svg)](https://github.com/platformio/platform-espressif32/actions)
 
-Espressif Systems is a fabless semiconductor company renowned for delivering cost-effective wireless communication microcontrollers. Its innovative solutions are widely adopted in Internet of Things (IoT), consumer electronics, and embedded applications around the globe.
+ESP32 is a series of low-cost, low-power system on a chip microcontrollers with integrated Wi-Fi and Bluetooth. ESP32 integrates an antenna switch, RF balun, power amplifier, low-noise receive amplifier, filters, and power management modules.
 
-## General
-* Issues with boards (wrong / missing). All issues caused from boards will not be fixed from the maintainer(s). A PR needs to be provided against branch `develop` to solve.
-* No support for the Arduino Nora Nano board, issues needs to be solved by the community
+* [Home](https://registry.platformio.org/platforms/platformio/espressif32) (home page in the PlatformIO Registry)
+* [Documentation](https://docs.platformio.org/page/platforms/espressif32.html) (advanced usage, packages, boards, frameworks, etc.)
 
-## IDE Preparation
-Prerequisites:
--	VSCode: git is required for pioarduino to function properly.
--	CLI: Python (v.3.10, v.3.11, 3.12, 3.13 or 3.14) is additionally needed
+# Usage
 
-## Installation
+1. [Install PlatformIO](https://platformio.org)
+2. Create PlatformIO project and configure a platform option in [platformio.ini](https://docs.platformio.org/page/projectconf.html) file:
 
-### VSCode Extension
-- Download and install [Microsoft Visual Studio Code](https://code.visualstudio.com/). [pioarduino IDE](https://marketplace.visualstudio.com/items?itemName=pioarduino.pioarduino-ide) is on top of it.
-- Open the extension manager.
-- Search for the `pioarduino ide` extension.
-- Install [pioarduino IDE](https://marketplace.visualstudio.com/items?itemName=pioarduino.pioarduino-ide) extension.
+## Stable version
 
-### CLI
-```bash
-curl -fsSL -o get-platformio.py https://raw.githubusercontent.com/pioarduino/pioarduino-core-installer/pioarduino/get-platformio.py
-python3 get-platformio.py
-source ~/.platformio/penv/bin/activate
-```
-> **Note:** The pioarduino platform installer automatically fixes the virtual environment if a conflict with the system Python is detected.
-
-## Usage
-
-### VSCode
-Setup new VSCode pioarduino project.
-
-### CLI
-```bash
-mkdir my-project && cd my-project
-pio project init --board esp32dev
-```
-
-## Documentation
-[pioarduino Wiki](https://deepwiki.com/pioarduino/platform-espressif32)
-The Wiki is AI generated and insane detailed and accurate.
-
-# Features
-
-## Filesystem Support
-
-pioarduino provides native support for multiple filesystem options, allowing you to choose the best solution for your project's needs:
-
-- **LittleFS** (default) - Modern wear-leveling filesystem designed specifically for flash memory. Offers excellent reliability and performance for ESP32 projects.
-- **SPIFFS** - Simple legacy filesystem. While still functional, LittleFS is recommended for new projects due to better wear-leveling and reliability.
-- **FatFS** - Industry-standard FAT filesystem with broad compatibility across platforms and operating systems.
-
-**Quick Start:**
-
-```ini
-[env:myenv]
-board_build.filesystem = fatfs
-```
-
-**Available Commands:**
-
-```bash
-pio run -t buildfs        # Build FatFS image
-pio run -t uploadfs       # Upload FatFS image
-pio run -t download_fatfs # Download and extract FatFS from device
-```
-
-See the [arduino-fatfs example](examples/arduino-fatfs/) for a complete working example.
-
-### Stable Arduino
-currently espressif Arduino 3.3.11 and IDF v5.5.5.
+See `platform` [documentation](https://docs.platformio.org/en/latest/projectconf/sections/env/options/platform/platform.html#projectconf-env-platform) for details.
 
 ```ini
 [env:stable]
-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+; recommended to pin to a version, see https://github.com/platformio/platform-espressif32/releases
+; platform = espressif32 @ ^6.0.1
+platform = espressif32
 board = ...
 ...
 ```
 
-### Development Arduino
-espressif Arduino repo branch master and latest compiled Arduino libs
+## Development version
 
 ```ini
 [env:development]
-platform = https://github.com/pioarduino/platform-espressif32.git#develop
+platform = https://github.com/platformio/platform-espressif32.git
 board = ...
 ...
 ```
 
-###  ESP32-C2, ESP32-C61 and ESP32-solo1 Arduino support (via pioarduino only feature: *Hybrid compile*)
-Example configuration:
+# Configuration
 
-```ini
-[env:esp32-c2-devkitm-1]
-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
-framework = arduino
-board = esp32-c2-devkitm-1
-monitor_speed = 115200
-
-[env:esp32-c61-devkitc1-n8r2]
-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
-framework = arduino
-board = esp32-c61-devkitc1-n8r2
-monitor_speed = 115200
-
-[env:esp32solo1]
-platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
-framework = arduino
-board = esp32-solo1
-monitor_speed = 115200
-
-```
-
-Looking for sponsor button? There is none. If you want to donate, please spend a litte to a charity organization.
+Please navigate to [documentation](https://docs.platformio.org/page/platforms/espressif32.html).
