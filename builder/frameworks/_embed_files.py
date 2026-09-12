@@ -14,24 +14,13 @@
 
 import shutil
 from os import SEEK_CUR, SEEK_END
-from os.path import basename, isfile
-from pathlib import Path
+from os.path import basename, isfile, join
 
 from SCons.Script import Builder
 
 Import("env")
 
 board = env.BoardConfig()
-mcu = board.get("build.mcu", "esp32")
-is_xtensa = mcu in ("esp32", "esp32s2", "esp32s3")
-
-cmake_dir = str(env.PioPlatform().get_package_dir("tool-cmake"))
-cmake_cmd = f'"{Path(cmake_dir) / "bin" / "cmake"}"'
-
-idf_dir = str(env.PioPlatform().get_package_dir("framework-espidf"))
-data_embed_script = (
-    f'"{Path(idf_dir) / "tools" / "cmake" / "scripts" / "data_file_embed_asm.cmake"}"'
-)
 
 #
 # Embedded files helpers
@@ -42,7 +31,7 @@ def extract_files(cppdefines, files_type):
     result = []
     files = env.GetProjectOption("board_build.%s" % files_type, "").splitlines()
     if files:
-        result.extend([str(Path("$PROJECT_DIR") / f.strip()) for f in files if f.strip()])
+        result.extend([join("$PROJECT_DIR", f.strip()) for f in files if f])
     else:
         files_define = "COMPONENT_" + files_type.upper()
         for define in cppdefines:
@@ -62,10 +51,9 @@ def extract_files(cppdefines, files_type):
                 return []
 
             for f in value.split(":"):
-                f = f.strip()
                 if not f:
                     continue
-                result.append(str(Path("$PROJECT_DIR") / f))
+                result.append(join("$PROJECT_DIR", f))
 
     for f in result:
         if not isfile(env.subst(f)):
@@ -86,14 +74,10 @@ def prepare_file(source, target, env):
     shutil.copy(filepath, filepath + ".piobkp")
 
     with open(filepath, "rb+") as fp:
-        fp.seek(0, SEEK_END)
-        size = fp.tell()
-        if size == 0:
+        fp.seek(-1, SEEK_END)
+        if fp.read(1) != "\0":
+            fp.seek(0, SEEK_CUR)
             fp.write(b"\0")
-        else:
-            fp.seek(-1, SEEK_END)
-            if fp.read(1) != b"\0":
-                fp.write(b"\0")
 
 
 def revert_original_file(source, target, env):
@@ -105,19 +89,20 @@ def revert_original_file(source, target, env):
 def embed_files(files, files_type):
     for f in files:
         filename = basename(f) + ".txt.o"
-        file_target = env.TxtToBin(str(Path("$BUILD_DIR") / filename), f)
+        file_target = env.TxtToBin(join("$BUILD_DIR", filename), f)
         env.Depends("$PIOMAINPROG", file_target)
         if files_type == "embed_txtfiles":
             env.AddPreAction(file_target, prepare_file)
             env.AddPostAction(file_target, revert_original_file)
-        env.AppendUnique(PIOBUILDFILES=[env.File(str(Path("$BUILD_DIR") / filename))])
+        env.AppendUnique(PIOBUILDFILES=[env.File(join("$BUILD_DIR", filename))])
 
 
 def transform_to_asm(target, source, env):
-    asm_targets = [str(Path("$BUILD_DIR") / (s.name + ".S")) for s in source]
-    return asm_targets, source
+    files = [join("$BUILD_DIR", s.name + ".S") for s in source]
+    return files, source
 
-    
+
+mcu = board.get("build.mcu", "esp32")
 env.Append(
     BUILDERS=dict(
         TxtToBin=Builder(
@@ -125,14 +110,14 @@ env.Append(
                 " ".join(
                     [
                         "riscv32-esp-elf-objcopy"
-                        if not is_xtensa
-                        else f"xtensa-{mcu}-elf-objcopy",
+                        if mcu in ("esp32c3", "esp32c6")
+                        else "xtensa-%s-elf-objcopy" % mcu,
                         "--input-target",
                         "binary",
                         "--output-target",
-                        "elf32-littleriscv" if not is_xtensa else "elf32-xtensa-le",
+                        "elf32-littleriscv" if mcu in ("esp32c3","esp32c6") else "elf32-xtensa-le",
                         "--binary-architecture",
-                        "riscv" if not is_xtensa else "xtensa",
+                        "riscv" if mcu in ("esp32c3","esp32c6") else "xtensa",
                         "--rename-section",
                         ".data=.rodata.embedded",
                         "$SOURCE",
@@ -147,12 +132,22 @@ env.Append(
             action=env.VerboseAction(
                 " ".join(
                     [
-                        cmake_cmd,
+                        join(
+                            env.PioPlatform().get_package_dir("tool-cmake") or "",
+                            "bin",
+                            "cmake",
+                        ),
                         "-DDATA_FILE=$SOURCE",
                         "-DSOURCE_FILE=$TARGET",
                         "-DFILE_TYPE=$FILE_TYPE",
                         "-P",
-                        data_embed_script,
+                        join(
+                            env.PioPlatform().get_package_dir("framework-espidf") or "",
+                            "tools",
+                            "cmake",
+                            "scripts",
+                            "data_file_embed_asm.cmake",
+                        ),
                     ]
                 ),
                 "Generating assembly for $TARGET",
@@ -175,7 +170,7 @@ for files_type in ("embed_txtfiles", "embed_files"):
     files = extract_files(flags, files_type)
     if "espidf" in env.subst("$PIOFRAMEWORK"):
         env.Requires(
-            str(Path("$BUILD_DIR") / "${PROGNAME}.elf"),
+            join("$BUILD_DIR", "${PROGNAME}.elf"),
             env.FileToAsm(
                 files,
                 FILE_TYPE="TEXT" if files_type == "embed_txtfiles" else "BINARY",
