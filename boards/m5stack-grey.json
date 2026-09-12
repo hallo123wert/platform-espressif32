@@ -1,12 +1,15 @@
 {
   "build": {
+    "arduino":{
+      "ldscript": "esp32_out.ld"
+    },
     "core": "esp32",
-    "extra_flags": "-DARDUINO_M5Stack_Core",
+    "extra_flags": "-DARDUINO_M5Stack_Core_ESP32",
     "f_cpu": "240000000L",
     "f_flash": "40000000L",
     "flash_mode": "dio",
     "mcu": "esp32",
-    "variant": "m5stack_core"
+    "variant": "m5stack_core_esp32"
   },
   "connectivity": [
     "wifi",
@@ -14,9 +17,6 @@
     "ethernet",
     "can"
   ],
-  "debug": {
-    "openocd_board": "esp-wroom-32.cfg"
-  },
   "frameworks": [
     "arduino",
     "espidf"

@@ -1,5 +1,8 @@
 {
   "build": {
+    "arduino": {
+      "ldscript": "esp32_out.ld"
+    },
     "core": "esp32",
     "extra_flags": [
       "-DARDUINO_ESP32_PICO_DEVKITM_2",
@@ -17,9 +20,6 @@
     "ethernet",
     "can"
   ],
-  "debug": {
-    "openocd_board": "esp32-wrover.cfg"
-  },
   "frameworks": [
     "arduino",
     "espidf"

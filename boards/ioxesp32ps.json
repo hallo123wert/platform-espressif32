@@ -1,5 +1,8 @@
 {
   "build": {
+    "arduino": {
+      "ldscript": "esp32_out.ld"
+    },
     "core": "esp32",
     "extra_flags": [
       "-mfix-esp32-psram-cache-issue",
@@ -20,7 +23,7 @@
     "can"
   ],
   "debug": {
-    "openocd_board": "esp32-wrover.cfg"
+    "openocd_board": "esp-wroom-32.cfg"
   },
   "frameworks": [
     "arduino",

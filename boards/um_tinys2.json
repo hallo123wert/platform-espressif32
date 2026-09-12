@@ -1,8 +1,7 @@
 {
   "build": {
     "arduino": {
-	"partitions": "default_4MB.csv",
-      "memory_type": "qio_qspi"
+      "ldscript": "esp32s2_out.ld"
     },
     "core": "esp32",
     "extra_flags": [
@@ -37,6 +36,8 @@
     "flash_size": "4MB",
     "maximum_ram_size": 327680,
     "maximum_size": 4194304,
+    "use_1200bps_touch": true,
+    "wait_for_upload_port": true,
     "require_upload_port": true,
     "speed": 921600
   },
