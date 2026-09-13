@@ -56,21 +56,6 @@ from platformio.project.config import ProjectConfig
 from platformio.package.manager.tool import ToolPackageManager
 
 
-# Import penv_setup functionality using explicit module loading for centralized Python environment management
-penv_setup_path = Path(__file__).parent / "builder" / "penv_setup.py"
-spec = importlib.util.spec_from_file_location("penv_setup", str(penv_setup_path))
-penv_setup_module = importlib.util.module_from_spec(spec)
-sys.modules["penv_setup"] = penv_setup_module
-spec.loader.exec_module(penv_setup_module)
-
-setup_penv_minimal = penv_setup_module.setup_penv_minimal
-get_executable_path = penv_setup_module.get_executable_path
-has_internet_connection = penv_setup_module.has_internet_connection
-install_freertos_gdb = penv_setup_module.install_freertos_gdb
-install_pio_lock = penv_setup_module.install_pio_lock
-GDB_TOOL_PACKAGES = penv_setup_module.GDB_TOOL_PACKAGES
-
-
 # Constants
 DEFAULT_DEBUG_SPEED = "5000"
 DEFAULT_APP_OFFSET = "0x10000"
@@ -85,13 +70,13 @@ ESP_BUILTIN_DEBUG_MCUS = frozenset([
 MCU_TOOLCHAIN_CONFIG = {
     "xtensa": {
         "mcus": frozenset(["esp32", "esp32s2", "esp32s3"]),
-        "toolchains": ["toolchain-xtensa-esp-elf", GDB_TOOL_PACKAGES["xtensa"]]
+        "toolchains": ["toolchain-xtensa-esp-elf", "toolchain-xtensa-gdb"]
     },
     "riscv": {
         "mcus": frozenset([
             "esp32c2", "esp32c3", "esp32c5", "esp32c6", "esp32c61", "esp32h2", "esp32p4"
         ]),
-        "toolchains": ["toolchain-riscv32-esp", GDB_TOOL_PACKAGES["riscv"]]
+        "toolchains": ["toolchain-riscv32-esp", "toolchain-riscv32-esp-gdb"]
     }
 }
 
@@ -136,9 +121,12 @@ logger = logging.getLogger(__name__)
 def is_internet_available():
     """
     Check if connected to Internet.
-    Uses the centralized internet check from penv_setup module.
     """
-    return has_internet_connection()
+    try:
+        response = requests.get("https://dl.espressif.com/", timeout=3)
+        return response.status_code == 200
+    except Exception:
+        return False
 
 
 def patch_file_downloader():
@@ -479,7 +467,6 @@ class Espressif32Platform(PlatformBase):
         Note: No timeout is set to allow installations to complete on slow networks.
         The tool-esp_install handles the retry logic.
         """
-        # Use penv Python if available, fallback to system Python
         python_executable = penv_python or python_exe
         
         cmd = [
@@ -516,9 +503,7 @@ class Espressif32Platform(PlatformBase):
 
     def _check_tool_version(self, tool_name: str) -> bool:
         """Check if the installed tool version matches the required version."""
-        # Clean up versioned directories before version checks to prevent conflicts
         self._cleanup_versioned_tool_directories(tool_name)
-        
         paths = self._get_tool_paths(tool_name)
 
         try:
@@ -555,14 +540,11 @@ class Espressif32Platform(PlatformBase):
         paths = self._get_tool_paths(tool_name)
         status = self._check_tool_status(tool_name)
 
-        # Use centrally configured Python executable if available
         penv_python = getattr(self, '_penv_python', None)
 
-        # Case 1: Fresh installation using idf_tools.py
         if status['has_idf_tools'] and status['has_tools_json']:
             return self._install_with_idf_tools(tool_name, paths, penv_python)
 
-        # Case 2: Tool already installed, perform version validation
         if (status['has_idf_tools'] and status['has_piopm'] and
                 not status['has_tools_json']):
             return self._handle_existing_tool(tool_name, paths)
@@ -577,7 +559,6 @@ class Espressif32Platform(PlatformBase):
         ):
             return False
 
-        # Copy tool metadata to IDF tools directory
         target_package_path = Path(IDF_TOOLS_PATH) / "tools" / tool_name / "package.json"
 
         if not safe_copy_file(paths['package_path'], target_package_path):
@@ -594,18 +575,13 @@ class Espressif32Platform(PlatformBase):
     def _handle_existing_tool(self, tool_name: str, paths: Dict[str, str]) -> bool:
         """Handle already installed tools with version checking."""
         if self._check_tool_version(tool_name):
-            # Version matches, use tool
             self.packages[tool_name]["version"] = paths['tool_path']
             self.packages[tool_name]["optional"] = False
             logger.debug(f"Tool {tool_name} found with correct version")
             return True
 
-        # Version mismatch detected, reinstall tool (cleanup already performed)
         logger.info(f"Reinstalling {tool_name} due to version mismatch")
-
-        # Remove the main tool directory (if it still exists after cleanup)
         safe_remove_directory(paths['tool_path'])
-
         return self.install_tool(tool_name)
 
     def _configure_arduino_framework(self, frameworks: List[str], mcu: str) -> None:
@@ -645,7 +621,6 @@ class Espressif32Platform(PlatformBase):
 
         for _, config in MCU_TOOLCHAIN_CONFIG.items():
             if mcu in config["mcus"]:
-                # Dynamically add ULP toolchain
                 result = config.copy()
                 result["ulp_toolchain"] = ["toolchain-esp32ulp"]
                 if mcu != "esp32":
@@ -665,57 +640,33 @@ class Espressif32Platform(PlatformBase):
     def _configure_mcu_toolchains(
         self, mcu: str, variables: Dict, targets: List[str]
     ) -> None:
-        """
-        Install toolchains and debugging packages required for the specified MCU.
-        
-        Installs the MCU's base toolchains (including GDB) from the MCU configuration. If an "ulp" 
-        directory exists, installs the ULP toolchain entries. When build variables or targets indicate 
-        debugging is required, installs debug-related tools (OpenOCD and ROM-ELF helper).
-        
-        Parameters:
-            mcu (str): MCU identifier (e.g., "esp32", "esp32c3").
-            variables (Dict): Build variables used to determine debugging requirements.
-            targets (List[str]): Build targets that may trigger installation of debug tooling.
-        """
+        """Install toolchains and debugging packages required for the specified MCU."""
         mcu_config = self._get_mcu_config(mcu)
         if not mcu_config:
             logger.warning(f"Unknown MCU: {mcu}")
             return
 
-        # Install base toolchains (including GDB)
         for toolchain in mcu_config["toolchains"]:
             self.install_tool(toolchain)
 
-        # ULP toolchain if ULP directory exists
         if mcu_config.get("ulp_toolchain") and Path("ulp").is_dir():
             for toolchain in mcu_config["ulp_toolchain"]:
                 self.install_tool(toolchain)
 
-        # Additional debug tools when needed
         if self._needs_debug_tools(variables, targets):
             self.install_tool("tool-openocd-esp32")
             self.install_tool("tool-esp-rom-elfs")
 
     def _configure_installer(self) -> None:
-        """
-        Ensure the ESP-IDF tools installer is present and up to date.
-        
-        Verifies and installs the tool-esp_install package when necessary, removes a legacy
-        PlatformIO install marker to avoid conflicts, and marks the installer package as
-        optional if idf_tools.py is available. Logs a warning if idf_tools.py cannot be found.
-        """
-        
-        # Check version - installs only when needed
+        """Ensure the ESP-IDF tools installer is present and up to date."""
         if not self._check_tl_install_version():
             logger.error("Error during tool-esp_install version check / installation")
             return
 
-        # Remove legacy PlatformIO install marker to prevent version conflicts
         old_tl_piopm_path = Path(self.packages_dir) / "tl-install" / ".piopm"
         if old_tl_piopm_path.exists():
             safe_remove_file(old_tl_piopm_path)
         
-        # Check if idf_tools.py is available
         installer_path = Path(self.packages_dir) / tl_install_name / "tools" / "idf_tools.py"
         
         if installer_path.exists():
@@ -734,33 +685,14 @@ class Espressif32Platform(PlatformBase):
             self.install_tool(package)
 
     def _check_exception_decoder_filter(self, variables: Dict) -> bool:
-        """
-        Check if esp32_exception_decoder filter is configured in monitor_filters.
-        
-        Args:
-            variables: Build configuration variables from platformio.ini
-            
-        Returns:
-            bool: True if esp32_exception_decoder is configured, False otherwise
-        """
+        """Check if esp32_exception_decoder filter is configured in monitor_filters."""
         monitor_filters = variables.get("monitor_filters", [])
-        
-        # Handle both list and string formats
         if isinstance(monitor_filters, str):
             monitor_filters = [f.strip() for f in monitor_filters.split(",")]
-        
         return "esp32_exception_decoder" in monitor_filters
 
     def _configure_rom_elfs_for_exception_decoder(self, variables: Dict) -> None:
-        """
-        Install tool-esp-rom-elfs if esp32_exception_decoder filter is enabled.
-        
-        The ESP32 exception decoder requires ROM ELF files to decode addresses
-        from ROM code regions in crash backtraces.
-        
-        Args:
-            variables: Build configuration variables from platformio.ini
-        """
+        """Install tool-esp-rom-elfs if esp32_exception_decoder filter is enabled."""
         if self._check_exception_decoder_filter(variables):
             logger.info("esp32_exception_decoder filter detected, installing tool-esp-rom-elfs")
             self.install_tool("tool-esp-rom-elfs")
@@ -777,13 +709,7 @@ class Espressif32Platform(PlatformBase):
                 self.install_tool(package)
 
     def _configure_clangd_tool(self) -> None:
-        """Install Espressif's clangd when the IDE has clangd IntelliSense enabled.
-
-        The pioarduino IDE extension exports PLATFORMIO_IDE_INTELLISENSE_ENGINE
-        so the platform can automatically install the matching tool package.
-        Espressif's clangd has native Xtensa and ESP RISC-V support that the
-        upstream clangd lacks.
-        """
+        """Install Espressif's clangd when the IDE has clangd IntelliSense enabled."""
         engine = os.environ.get("PLATFORMIO_IDE_INTELLISENSE_ENGINE", "").strip().lower()
         if engine == "clangd" and "tool-clangd-esp" in self.packages:
             logger.info("clangd IntelliSense engine detected, installing tool-clangd-esp")
@@ -796,51 +722,22 @@ class Espressif32Platform(PlatformBase):
         if uploader == "dfu":
             self.install_tool("tool-dfuutil-arduino")
 
-    def setup_python_env(self, env):
-        """Configure SCons environment with centrally managed Python executable paths."""
-        # Python environment is centrally managed in configure_default_packages
-        if hasattr(self, '_penv_python') and hasattr(self, '_esptool_path'):
-            # Update SCons environment with centrally configured Python executable
-            env.Replace(PYTHONEXE=self._penv_python)
-            return self._penv_python, self._esptool_path
-
     def configure_default_packages(self, variables: Dict, targets: List[str]) -> Any:
         """Main configuration method with optimized package management."""
         if not variables.get("board"):
             return super().configure_default_packages(variables, targets)
 
-        # Base configuration
         board_config = self.board_config(variables.get("board"))
         mcu = variables.get("board_build.mcu", board_config.get("build.mcu", "esp32"))
-        frameworks = list(variables.get("pioframework", []))  # Create copy
+        frameworks = list(variables.get("pioframework", []))
 
         try:
-            # FIRST: Install required packages
             self._configure_installer()
             self._install_esptool_package()
             
-            # Complete Python virtual environment setup
-            config = ProjectConfig.get_instance()
-            core_dir = config.get("platformio", "core_dir")
-            
-            # Setup penv using minimal function (no SCons dependencies, esptool from tl-install)
-            penv_python, esptool_path = setup_penv_minimal(self, core_dir, install_esptool=True)
-            
-            # Store both for later use
-            self._penv_python = penv_python
-            self._esptool_path = esptool_path
-            
-            # Configuration steps (now with penv available)
             self._configure_arduino_framework(frameworks, mcu)
             self._configure_espidf_framework(frameworks, variables, board_config, mcu)
             self._configure_mcu_toolchains(mcu, variables, targets)
-            
-            # Install freertos-gdb after MCU toolchains are installed
-            install_freertos_gdb(self, get_executable_path(str(Path(core_dir) / "penv"), "uv"), penv_python, str(Path(core_dir) / ".cache" / "uv"))
-
-            # Install pio-lock if enabled in platformio.ini (via custom_pio_lock = true)
-            if variables.get("custom_pio_lock", "false").lower() in ("true", "yes", "1"):
-                install_pio_lock(self, get_executable_path(str(Path(core_dir) / "penv"), "uv"), penv_python, str(Path(core_dir) / ".cache" / "uv"))
 
             if "espidf" in frameworks:
                 self._install_common_idf_packages()
@@ -854,7 +751,6 @@ class Espressif32Platform(PlatformBase):
 
         except Exception as e:
             logger.error(f"Error in package configuration: {type(e).__name__}: {e}")
-            # Don't re-raise to maintain compatibility
 
         return super().configure_default_packages(variables, targets)
 
@@ -871,28 +767,12 @@ class Espressif32Platform(PlatformBase):
         return result
 
     def _add_dynamic_options(self, board):
-        """
-        Add dynamic upload protocol and debug-tool entries to a board manifest.
-        
-        Ensures upload.protocols and upload.protocol defaults, auto-adds supported debug tools
-        (and MCU-specific builtin/ftdi entries), sets an SVD path when available, and
-        populates debug.tools with OpenOCD server configurations, init commands, and
-        per-tool metadata. Returns the updated board object.
-        
-        Parameters:
-            board: Board object whose manifest will be modified.
-        
-        Returns:
-            The same Board instance with its manifest updated to include dynamic upload
-            protocols and debug tool configurations.
-        """
-        # Upload protocols
+        """Add dynamic upload protocol and debug-tool entries to a board manifest."""
         if not board.get("upload.protocols", []):
             board.manifest["upload"]["protocols"] = ["esptool", "espota"]
         if not board.get("upload.protocol", ""):
             board.manifest["upload"]["protocol"] = "esptool"
 
-        # Debug tools
         debug = board.manifest.get("debug", {})
         non_debug_protocols = ["esptool", "espota"]
         supported_debug_tools = [
@@ -910,16 +790,13 @@ class Espressif32Platform(PlatformBase):
             "tumpa"
         ]
 
-        # Special configuration for Kaluga board
         if board.id == "esp32-s2-kaluga-1":
             supported_debug_tools.append("ftdi")
 
-        # ESP-builtin for certain MCUs
         mcu = board.get("build.mcu", "")
         if mcu in ESP_BUILTIN_DEBUG_MCUS:
             supported_debug_tools.append("esp-builtin")
 
-        # Auto-assign SVD path based on MCU if not already set
         if debug and not debug.get("svd_path"):
             svd_file = Path(self.get_dir()) / "misc" / "svd" / f"{mcu}.svd"
             if svd_file.is_file():
@@ -937,7 +814,6 @@ class Espressif32Platform(PlatformBase):
         if "tools" not in debug:
             debug["tools"] = {}
 
-        # Debug tool configuration
         for link in upload_protocols:
             if link in non_debug_protocols or link in debug["tools"]:
                 continue
@@ -973,24 +849,16 @@ class Espressif32Platform(PlatformBase):
                 "default": link == debug.get("default_tool"),
             }
 
-            # Avoid erasing Arduino Nano bootloader by preloading app binary
             if board.id == "arduino_nano_esp32":
                 debug["tools"][link]["load_cmds"] = "preload"
         board.manifest["debug"] = debug
         return board
 
     def _gdb_has_python(self, mcu: str) -> bool:
-        """
-        Determine whether the GDB executable for the given MCU supports embedding Python.
-        
-        Returns:
-            True if a GDB binary for the MCU accepts Python commands,
-            False otherwise (including when no matching tool/package is found or the probe fails).
-        """
+        """Determine whether the GDB executable for the given MCU supports embedding Python."""
         mcu_config = self._get_mcu_config(mcu)
         if not mcu_config:
             return False
-        # Filter toolchains to get only GDB tools
         gdb_tools = [tool for tool in mcu_config["toolchains"] if "gdb" in tool]
         for tool_pkg in gdb_tools:
             pkg_dir = self.get_package_dir(tool_pkg)
@@ -998,7 +866,6 @@ class Espressif32Platform(PlatformBase):
                 continue
             is_xtensa = mcu in MCU_TOOLCHAIN_CONFIG["xtensa"]["mcus"]
             if is_xtensa:
-                # Per-target binary first, then the generic name
                 arch_prefixes = [f"xtensa-{mcu}-elf", "xtensa-esp-elf"]
             else:
                 arch_prefixes = ["riscv32-esp-elf"]
@@ -1023,14 +890,7 @@ class Espressif32Platform(PlatformBase):
 
     @staticmethod
     def _get_freertos_gdb_cmds() -> List[str]:
-        """
-        Generate GDB commands to load FreeRTOS thread-awareness extension.
-        
-        Returns:
-            list[str]: GDB command strings that attempt to import the `freertos_gdb` Python
-            extension and print a warning if it is not available.
-        """
-        # Use single-line try/except to survive cleanup_cmds stripping indentation
+        """Generate GDB commands to load FreeRTOS thread-awareness extension."""
         return [
             "python",
             "try: import freertos_gdb",
@@ -1039,19 +899,7 @@ class Espressif32Platform(PlatformBase):
         ]
 
     def _get_rom_elf_gdb_cmds(self, mcu: str) -> List[str]:
-        """
-        Generate a GDB command sequence that automatically selects and loads ROM ELF symbols for the given MCU.
-        
-        Builds a `target hookpost-extended-remote` hook using ROM metadata (from misc/roms.json) and installed
-        ROM ELF artifacts (tool-esp-rom-elfs) so the appropriate ROM symbol file is loaded after connecting to the target.
-        
-        Parameters:
-            mcu (str): MCU identifier used to look up ROM entries in misc/roms.json.
-        
-        Returns:
-            A list of GDB command strings that implement the ROM selection and loading hook; an empty list
-            if ROM metadata or ROM ELF package is not available.
-        """
+        """Generate a GDB command sequence that automatically selects and loads ROM ELF symbols."""
         rom_elfs_dir = self.get_package_dir("tool-esp-rom-elfs")
         if not rom_elfs_dir or not Path(rom_elfs_dir).is_dir():
             return []
@@ -1089,18 +937,7 @@ class Espressif32Platform(PlatformBase):
 
     @staticmethod
     def _rom_date_condition(date_addr: int, date_str: str) -> str:
-        """
-        Constructs a GDB conditional expression that compares 32-bit memory words
-        starting at a given address to a provided build-date string.
-        
-        Parameters:
-            date_addr (int): Base memory address where the build-date string is stored.
-            date_str (str): Build-date string to match; compared in 4-byte little-endian chunks.
-        
-        Returns:
-            condition (str): A GDB `if` expression like `if (*(int*)0xADDR) == 0xVALUE && ...`
-            that tests each 4-byte chunk of `date_str` against memory at `date_addr`.
-        """
+        """Constructs a GDB conditional expression that compares 32-bit memory words."""
         parts = []
         for i in range(0, len(date_str), 4):
             chunk = date_str[i:i + 4]
@@ -1112,20 +949,7 @@ class Espressif32Platform(PlatformBase):
     def _build_rom_elf_conditions(
         cls, entries: list, mcu: str, rom_dir: str, depth: int
     ) -> List[str]:
-        """
-        Build a list of GDB conditional command strings that load ROM ELF symbols based on ROM revision.
-        
-        Parameters:
-            entries (list): Ordered list of ROM metadata dicts, each containing at least
-                "build_date_str_addr" (hex string), "build_date_str" (string), and "rev" (revision identifier).
-            mcu (str): MCU identifier used to form ROM ELF filenames.
-            rom_dir (str): Directory path (may include trailing slash) where ROM ELF files reside.
-            depth (int): Current recursion depth used to compute indentation for nested blocks.
-        
-        Returns:
-            List[str]: A sequence of GDB command lines forming nested if/else/end blocks that
-            evaluate ROM build-date memory values and call `add-symbol-file` for the matching ROM ELF.
-        """
+        """Build a list of GDB conditional command strings that load ROM ELF symbols."""
         if not entries:
             return []
         indent = "  " * depth
@@ -1151,16 +975,7 @@ class Espressif32Platform(PlatformBase):
         return lines
 
     def _get_openocd_interface(self, link: str, board) -> str:
-        """
-        Resolve the OpenOCD interface identifier for a given debug link and board.
-        
-        Parameters:
-            link (str): Debug link name.
-            board: Board object whose `id` may affect the chosen interface.
-        
-        Returns:
-            str: OpenOCD interface string (for example "jlink", "ftdi/esp_ftdi", or "esp_usb_jtag").
-        """
+        """Resolve the OpenOCD interface identifier for a given debug link and board."""
         if link in ("jlink", "cmsis-dap"):
             return link
         if link in ("esp-prog", "ftdi"):
@@ -1188,29 +1003,7 @@ class Espressif32Platform(PlatformBase):
         ]
 
     def configure_debug_session(self, debug_config):
-        """
-        Configure debug session to inject debug extensions and prepare GDB load commands for flashing.
-        
-        This updates the provided debug_config in-place:
-        - Injects additional GDB init commands and ROM/FreeRTOS extensions via _inject_debug_extensions.
-        - If the debug server is OpenOCD, appends an adapter speed argument derived from debug_config.speed.
-        - If debug_config.load_cmds is the default ["load"] and valid flash image metadata is present in
-          build_data["extra"]["flash_images"], replaces load_cmds with a sequence of `monitor program_esp
-          "<path>" <offset> verify` entries for each flash image and the application binary
-          (using build_data["prog_path"] and application_offset if available;
-          falls back to DEFAULT_APP_OFFSET and logs a warning).
-        - If flash image metadata is missing or invalid, leaves load_cmds unchanged and logs a warning.
-        
-        Parameters:
-            debug_config: object
-                Debug session configuration object that must provide (at least) the attributes:
-                - build_data (dict): build metadata including an "extra" dict with "flash_images"
-                  (list of { "path", "offset" }) and optional "application_offset".
-                - server (dict | None): server configuration; if server["executable"]
-                  contains "openocd", server["arguments"] (list) will be extended.
-                - load_cmds (list): current GDB load commands; may be replaced.
-                - speed (str | None): optional adapter speed value used when configuring OpenOCD.
-        """
+        """Configure debug session to inject debug extensions and prepare GDB load commands."""
         self._inject_debug_extensions(debug_config)
 
         build_extra_data = debug_config.build_data.get("extra", {})
@@ -1258,25 +1051,13 @@ class Espressif32Platform(PlatformBase):
         debug_config.load_cmds = load_cmds
 
     def _inject_debug_extensions(self, debug_config):
-        """
-        Inject FreeRTOS thread-awareness and ROM ELF GDB commands into the debug tool's init_cmds.
-        
-        This inserts additional GDB initialization commands (FreeRTOS Python-based helpers when available
-        and ROM-ELF symbol loading commands) into debug_config.tool_settings["init_cmds"] at the position
-        immediately before the "target extended-remote" command.
-        
-        Parameters:
-            debug_config: An object representing the debug session configuration. It must provide:
-                - board_config: a mapping containing "build.mcu".
-                - tool_settings: a mapping containing "init_cmds", a list of GDB init command strings.
-        """
+        """Inject FreeRTOS thread-awareness and ROM ELF GDB commands into the debug tool's init_cmds."""
         mcu = debug_config.board_config.get("build.mcu", "")
         if not mcu:
             return
         tool_init_cmds = debug_config.tool_settings.get("init_cmds")
         if tool_init_cmds is None:
             return
-        # Find insertion point: just before "target extended-remote"
         insert_idx = next(
             (i for i, cmd in enumerate(tool_init_cmds)
              if "target extended-remote" in cmd),
