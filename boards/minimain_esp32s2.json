@@ -1,7 +1,6 @@
 {
   "build": {
     "arduino": {
-      "ldscript": "esp32s2_out.ld",
       "partitions": "partitions-4MB-tinyuf2.csv"
     },
     "core": "esp32",
@@ -35,7 +34,7 @@
     "arduino",
     "espidf"
   ],
-  "name": "Department of Alchemy MiniMain ESP32-S2",
+  "name": "Deparment of Alchemy MiniMain ESP32-S2",
   "upload": {
     "flash_size": "4MB",
     "maximum_ram_size": 327680,
@@ -46,5 +45,5 @@
     "speed": 460800
   },
   "url": "https://github.com/DepartmentOfAlchemy/minimain-esp32-s2",
-  "vendor": "Department of Alchemy"
+  "vendor": "Deparment of Alchemy"
 }

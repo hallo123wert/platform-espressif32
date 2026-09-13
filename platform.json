@@ -12,7 +12,7 @@
     "RISC-V"
   ],
   "engines": {
-    "platformio": "^6"
+    "platformio": ">=6.1.19"
   },
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
       "script": "builder/frameworks/arduino.py"
     },
     "espidf": {
+      "package": "framework-espidf",
       "script": "builder/frameworks/espidf.py"
     }
   },
